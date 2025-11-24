@@ -140,3 +140,41 @@ class ProjectUpdateSchema(BaseModel):
             value = value.strip()
             return value or None
         raise TypeError("phone values must be strings")
+
+
+class ProjectResponseSchema(BaseModel):
+    """Schema for project data in API responses"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_name: str
+    type: Optional[str]
+    project_status: str
+    project_description: Optional[str]
+    notes: Optional[str]
+    project_start: Optional[datetime]
+    project_end: Optional[datetime]
+    project_worth: Optional[float]
+    client_id: Optional[int]
+    lead_id: Optional[int]
+    client_name: Optional[str]
+    lead_name: Optional[str]
+    created_at: Optional[datetime]
+    primary_contact_name: Optional[str]
+    primary_contact_title: Optional[str]
+    primary_contact_email: Optional[str]
+    primary_contact_phone: Optional[str]
+    primary_contact_phone_label: Optional[str]
+
+
+class ProjectListResponseSchema(BaseModel):
+    """Schema for paginated project list responses"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    projects: list[ProjectResponseSchema]
+    total: int
+    page: int
+    per_page: int
+    sort_order: str
