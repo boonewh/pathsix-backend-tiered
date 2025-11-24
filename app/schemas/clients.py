@@ -6,7 +6,7 @@ Step 1A of validation implementation.
 from typing import Optional
 from datetime import datetime
 from pydantic import BaseModel, Field, EmailStr, ConfigDict, field_validator
-from app.constants import TYPE_OPTIONS, PHONE_LABELS
+from app.constants import CLIENT_STATUS_OPTIONS, TYPE_OPTIONS, PHONE_LABELS
 
 
 class ClientCreateSchema(BaseModel):
@@ -45,12 +45,10 @@ class ClientCreateSchema(BaseModel):
     @field_validator("status")
     @classmethod
     def validate_status(cls, value: Optional[str]) -> str:
-        # Define valid client statuses (can be expanded later)
-        valid_statuses = ["new", "active", "inactive", "potential", "archived"]
         if value is None or value.strip() == "":
             return "new"
-        if value not in valid_statuses:
-            raise ValueError(f"status must be one of: {', '.join(valid_statuses)}")
+        if value not in CLIENT_STATUS_OPTIONS:
+            raise ValueError(f"status must be one of: {', '.join(CLIENT_STATUS_OPTIONS)}")
         return value
 
     @field_validator("phone_label", "secondary_phone_label")
@@ -107,11 +105,10 @@ class ClientUpdateSchema(BaseModel):
     @field_validator("status")
     @classmethod
     def validate_status(cls, value: Optional[str]) -> Optional[str]:
-        valid_statuses = ["new", "active", "inactive", "potential", "archived"]
         if value is None or value.strip() == "":
             return value
-        if value not in valid_statuses:
-            raise ValueError(f"status must be one of: {', '.join(valid_statuses)}")
+        if value not in CLIENT_STATUS_OPTIONS:
+            raise ValueError(f"status must be one of: {', '.join(CLIENT_STATUS_OPTIONS)}")
         return value
 
     @field_validator("phone_label", "secondary_phone_label")
@@ -140,3 +137,43 @@ class ClientAssignSchema(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
 
     assigned_to: int = Field(..., gt=0, description="User ID to assign the client to")
+
+
+class ClientResponseSchema(BaseModel):
+    """Schema for client data in API responses"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    contact_person: Optional[str]
+    contact_title: Optional[str]
+    email: Optional[str]
+    phone: Optional[str]
+    phone_label: Optional[str]
+    secondary_phone: Optional[str]
+    secondary_phone_label: Optional[str]
+    address: Optional[str]
+    city: Optional[str]
+    state: Optional[str]
+    zip: Optional[str]
+    notes: Optional[str]
+    type: Optional[str]
+    status: str
+    created_at: datetime
+    assigned_to: Optional[int]
+    assigned_to_name: Optional[str]
+    interaction_count: Optional[int] = None
+    last_interaction_date: Optional[str] = None
+
+
+class ClientListResponseSchema(BaseModel):
+    """Schema for paginated client list responses"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    clients: list[ClientResponseSchema]
+    total: int
+    page: int
+    per_page: int
+    sort_order: str

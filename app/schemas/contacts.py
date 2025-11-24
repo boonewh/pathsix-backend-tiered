@@ -87,3 +87,34 @@ class ContactUpdateSchema(BaseModel):
             value = value.strip()
             return value or None
         raise TypeError("phone values must be strings")
+
+
+class ContactResponseSchema(BaseModel):
+    """Schema for contact data in API responses"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    client_id: Optional[int]
+    lead_id: Optional[int]
+    first_name: str
+    last_name: Optional[str]
+    title: Optional[str]
+    email: Optional[str]
+    phone: Optional[str]
+    phone_label: Optional[str]
+    secondary_phone: Optional[str]
+    secondary_phone_label: Optional[str]
+    notes: Optional[str]
+    created_at: datetime
+
+
+class ContactListResponseSchema(BaseModel):
+    """Schema for lists of contacts"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    contacts: list[ContactResponseSchema]
+    total: Optional[int] = None
+    page: Optional[int] = None
+    per_page: Optional[int] = None
