@@ -1,11 +1,13 @@
 from quart import Blueprint, request, jsonify
 from datetime import datetime, timedelta
+from pydantic import ValidationError
 from app.models import Client, ActivityLog, ActivityType, User, Interaction
 from app.database import SessionLocal
 from app.utils.auth_utils import requires_auth
 from app.utils.email_utils import send_assignment_notification
 from app.utils.phone_utils import clean_phone_number
 from app.constants import TYPE_OPTIONS, PHONE_LABELS
+from app.schemas.clients import ClientCreateSchema, ClientUpdateSchema, ClientAssignSchema
 from sqlalchemy import or_, and_, func, desc
 from sqlalchemy.orm import joinedload
 
@@ -149,30 +151,37 @@ async def list_clients():
 @requires_auth()
 async def create_client():
     user = request.user
-    data = await request.get_json()
+    raw_data = await request.get_json()
+    
+    # Validate input using Pydantic schema
+    try:
+        data = ClientCreateSchema(**raw_data)
+    except ValidationError as e:
+        return jsonify({
+            "error": "Validation failed",
+            "details": e.errors()
+        }), 400
+
     session = SessionLocal()
     try:
-        client_type = data.get("type", TYPE_OPTIONS[0])
-        if client_type not in TYPE_OPTIONS:
-            client_type = TYPE_OPTIONS[0]
-
         client = Client(
             tenant_id=user.tenant_id,
             created_by=user.id,
-            name=data["name"],
-            contact_person=data.get("contact_person"),
-            contact_title=data.get("contact_title"),
-            email=data.get("email"),
-            phone=clean_phone_number(data.get("phone")) if data.get("phone") else None,
-            phone_label=data.get("phone_label", PHONE_LABELS[0]),
-            secondary_phone=clean_phone_number(data.get("secondary_phone")) if data.get("secondary_phone") else None,
-            secondary_phone_label=data.get("secondary_phone_label"),
-            address=data.get("address"),
-            city=data.get("city"),
-            state=data.get("state"),
-            zip=data.get("zip"),
-            notes=data.get("notes"),
-            type=client_type,
+            name=data.name,
+            contact_person=data.contact_person,
+            contact_title=data.contact_title,
+            email=str(data.email) if data.email else None,
+            phone=clean_phone_number(data.phone) if data.phone else None,
+            phone_label=data.phone_label,
+            secondary_phone=clean_phone_number(data.secondary_phone) if data.secondary_phone else None,
+            secondary_phone_label=data.secondary_phone_label,
+            address=data.address,
+            city=data.city,
+            state=data.state,
+            zip=data.zip,
+            notes=data.notes,
+            type=data.type,
+            status=data.status,
             created_at=datetime.utcnow()
         )
         session.add(client)
@@ -248,7 +257,17 @@ async def get_client(client_id):
 @requires_auth()
 async def update_client(client_id):
     user = request.user
-    data = await request.get_json()
+    raw_data = await request.get_json()
+    
+    # Validate input using Pydantic schema
+    try:
+        data = ClientUpdateSchema(**raw_data)
+    except ValidationError as e:
+        return jsonify({
+            "error": "Validation failed",
+            "details": e.errors()
+        }), 400
+    
     session = SessionLocal()
     try:
         client_query = session.query(Client).filter(
@@ -269,16 +288,19 @@ async def update_client(client_id):
         if not client:
             return jsonify({"error": "Client not found"}), 404
 
-        for field in [
-            "name", "contact_person", "contact_title", "email", "phone_label", 
-            "secondary_phone_label", "address", "city", "state", "zip", "notes"
-        ]:
-            if field in data:
-                setattr(client, field, data[field] or None)
-        if "phone" in data:
-            client.phone = clean_phone_number(data["phone"]) if data["phone"] else None
-        if "secondary_phone" in data:
-            client.secondary_phone = clean_phone_number(data["secondary_phone"]) if data["secondary_phone"] else None
+        # Update fields that were provided and validated
+        update_data = data.model_dump(exclude_unset=True)
+        
+        for field, value in update_data.items():
+            if field in ["phone", "secondary_phone"]:
+                # Clean phone numbers
+                cleaned_phone = clean_phone_number(value) if value else None
+                setattr(client, field, cleaned_phone)
+            elif field == "email":
+                # Convert EmailStr to string
+                setattr(client, field, str(value) if value else None)
+            else:
+                setattr(client, field, value)
         if "type" in data and data["type"] in TYPE_OPTIONS:
             client.type = data["type"]
 
@@ -330,11 +352,16 @@ async def delete_client(client_id):
 @requires_auth(roles=["admin"])
 async def assign_client(client_id):
     user = request.user
-    data = await request.get_json()
-    assigned_to = data.get("assigned_to")
-
-    if not assigned_to:
-        return jsonify({"error": "Missing assigned_to"}), 400
+    raw_data = await request.get_json()
+    
+    # Validate input using Pydantic schema
+    try:
+        data = ClientAssignSchema(**raw_data)
+    except ValidationError as e:
+        return jsonify({
+            "error": "Validation failed",
+            "details": e.errors()
+        }), 400
 
     session = SessionLocal()
     try:
@@ -347,9 +374,9 @@ async def assign_client(client_id):
         if not client:
             return jsonify({"error": "Client not found"}), 404
 
-        # Optional: validate user exists and is active
+        # Validate that assigned_to is a valid user
         assigned_user = session.query(User).filter(
-            User.id == assigned_to,
+            User.id == data.assigned_to,
             User.tenant_id == user.tenant_id,
             User.is_active == True
         ).first()
@@ -357,7 +384,7 @@ async def assign_client(client_id):
         if not assigned_user:
             return jsonify({"error": "Assigned user not found or inactive"}), 400
 
-        client.assigned_to = assigned_to
+        client.assigned_to = data.assigned_to
         client.updated_by = user.id
         client.updated_at = datetime.utcnow()
 

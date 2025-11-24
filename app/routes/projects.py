@@ -1,11 +1,13 @@
 from quart import Blueprint, request, jsonify
 from datetime import datetime
+from pydantic import ValidationError
 from app.models import Project, ActivityLog, ActivityType, Client, Lead, User
 from app.database import SessionLocal
 from app.utils.auth_utils import requires_auth
 from app.utils.phone_utils import clean_phone_number  
 from app.utils.email_utils import send_assignment_notification
 from app.constants import PROJECT_STATUS_OPTIONS, PHONE_LABELS
+from app.schemas.projects import ProjectCreateSchema, ProjectUpdateSchema
 from sqlalchemy.orm import joinedload
 from sqlalchemy import or_, and_
 
@@ -176,34 +178,38 @@ async def get_project(project_id):
 @requires_auth()
 async def create_project():
     user = request.user
-    data = await request.get_json()
-    session = SessionLocal()
-
+    raw_data = await request.get_json()
+    
+    # Validate input using Pydantic schema
     try:
-        status = data.get("project_status", PROJECT_STATUS_OPTIONS[0])
-        if status not in PROJECT_STATUS_OPTIONS:
-            status = PROJECT_STATUS_OPTIONS[0]
+        data = ProjectCreateSchema(**raw_data)
+    except ValidationError as e:
+        return jsonify({
+            "error": "Validation failed",
+            "details": e.errors()
+        }), 400
 
+    session = SessionLocal()
+    try:
         project = Project(
             tenant_id=user.tenant_id,
-            client_id=data.get("client_id"),
-            lead_id=data.get("lead_id"),
-            project_name=data["project_name"],
-            type=data.get("type", "None"),
-            project_status=status,
-            project_description=data.get("project_description"),
-            notes=data.get("notes"),
-            project_start=parse_date_with_default_time(data.get("project_start")),
-            project_end=parse_date_with_default_time(data.get("project_end")),
-            project_worth=data.get("project_worth") or 0,
+            client_id=data.client_id,
+            lead_id=data.lead_id,
+            project_name=data.project_name,
+            type=data.type,
+            project_status=data.project_status,
+            project_description=data.project_description,
+            notes=data.notes,
+            project_start=data.project_start,
+            project_end=data.project_end,
+            project_worth=data.project_worth or 0,
             created_by=user.id,
             created_at=datetime.utcnow(),
-            # NEW: Handle contact fields
-            primary_contact_name=data.get("primary_contact_name"),
-            primary_contact_title=data.get("primary_contact_title"),
-            primary_contact_email=data.get("primary_contact_email"),
-            primary_contact_phone=clean_phone_number(data.get("primary_contact_phone")) if data.get("primary_contact_phone") else None,
-            primary_contact_phone_label=data.get("primary_contact_phone_label", PHONE_LABELS[0])
+            primary_contact_name=data.primary_contact_name,
+            primary_contact_title=data.primary_contact_title,
+            primary_contact_email=str(data.primary_contact_email) if data.primary_contact_email else None,
+            primary_contact_phone=clean_phone_number(data.primary_contact_phone) if data.primary_contact_phone else None,
+            primary_contact_phone_label=data.primary_contact_phone_label
         )
         session.add(project)
         session.commit()
@@ -224,7 +230,17 @@ async def create_project():
 @requires_auth()
 async def update_project(project_id):
     user = request.user
-    data = await request.get_json()
+    raw_data = await request.get_json()
+    
+    # Validate input using Pydantic schema
+    try:
+        data = ProjectUpdateSchema(**raw_data)
+    except ValidationError as e:
+        return jsonify({
+            "error": "Validation failed",
+            "details": e.errors()
+        }), 400
+    
     session = SessionLocal()
     try:
         project = session.query(Project).filter(
@@ -235,54 +251,27 @@ async def update_project(project_id):
         if not project:
             return jsonify({"error": "Project not found"}), 404
 
-        # Capture current assigned_to
-        previous_assigned_to = getattr(project, "assigned_to", None)
+        # Update fields that were provided and validated
+        update_data = data.model_dump(exclude_unset=True)
+        
+        for field, value in update_data.items():
+            if field == "primary_contact_phone":
+                # Clean phone number
+                cleaned_phone = clean_phone_number(value) if value else None
+                setattr(project, field, cleaned_phone)
+            elif field == "primary_contact_email":
+                # Convert EmailStr to string
+                setattr(project, field, str(value) if value else None)
+            elif field == "project_worth":
+                # Ensure project_worth is not None
+                setattr(project, field, value or 0)
+            else:
+                setattr(project, field, value)
 
-        # Update basic fields
-        for field in [
-            "project_name", "type", "project_description", "project_worth", "client_id", "lead_id", "notes", "assigned_to"
-        ]:
-            if field in data:
-                if field == "project_worth":
-                    setattr(project, field, data.get("project_worth") or 0)
-                else:
-                    setattr(project, field, data[field])
-
-        # NEW: Handle contact fields
-        contact_fields = [
-            "primary_contact_name", "primary_contact_title", "primary_contact_email", "primary_contact_phone_label"
-        ]
-        for field in contact_fields:
-            if field in data:
-                setattr(project, field, data[field] or None)
-
-        # Handle phone number with cleaning
-        if "primary_contact_phone" in data:
-            project.primary_contact_phone = clean_phone_number(data["primary_contact_phone"]) if data["primary_contact_phone"] else None
-                
-        if "project_status" in data:
-            status = data["project_status"]
-            if status in PROJECT_STATUS_OPTIONS:
-                project.project_status = status
-
-        if "project_start" in data:
-            project.project_start = parse_date_with_default_time(data["project_start"])
-        if "project_end" in data:
-            project.project_end = parse_date_with_default_time(data["project_end"])
-
+        project.last_updated_by = user.id
+        project.updated_at = datetime.utcnow()
         session.commit()
         session.refresh(project)
-
-        if "assigned_to" in data and data["assigned_to"] and data["assigned_to"] != previous_assigned_to:
-            assigned_user = session.query(User).get(data["assigned_to"])
-            if assigned_user and assigned_user.email:
-                await send_assignment_notification(
-                    to_email=assigned_user.email,
-                    entity_type="project",
-                    entity_name=project.project_name,
-                    assigned_by=user.email
-                )
-
 
         return jsonify({
             "id": project.id,
