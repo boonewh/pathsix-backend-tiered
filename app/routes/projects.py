@@ -533,12 +533,14 @@ async def delete_project(project_id):
     try:
         project = session.query(Project).filter(
             Project.id == project_id,
-            Project.tenant_id == user.tenant_id,
-            Project.deleted_at == None  # Only allow deleting active items
+            Project.tenant_id == user.tenant_id
         ).first()
 
         if not project:
             return jsonify({"error": "Project not found"}), 404
+
+        if project.deleted_at is not None:
+            return jsonify({"message": "Project already deleted"}), 200
 
         project.deleted_at = datetime.utcnow()
         project.deleted_by = user.id
@@ -651,6 +653,30 @@ async def bulk_delete_projects():
         )
         session.commit()
         return jsonify({"message": f"{updated_count} project(s) deleted"})
+    finally:
+        session.close()
+
+@projects_bp.route("/bulk-purge", methods=["DELETE", "POST"])
+@requires_auth(roles=["admin"])
+async def bulk_purge_projects():
+    user = request.user
+    data = await request.get_json()
+    project_ids = data.get("project_ids", [])
+
+    if not project_ids or not isinstance(project_ids, list):
+        return jsonify({"error": "No project IDs provided"}), 400
+
+    session = SessionLocal()
+    try:
+        # Only purge projects that are already soft-deleted
+        deleted_count = session.query(Project).filter(
+            Project.tenant_id == user.tenant_id,
+            Project.id.in_(project_ids),
+            Project.deleted_at != None
+        ).delete(synchronize_session=False)
+        
+        session.commit()
+        return jsonify({"message": f"{deleted_count} project(s) permanently deleted"})
     finally:
         session.close()
 

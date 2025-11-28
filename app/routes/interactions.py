@@ -1,5 +1,6 @@
 from quart import Blueprint, request, jsonify, Response
 from datetime import datetime
+from pydantic import ValidationError
 from sqlalchemy.orm import joinedload
 from sqlalchemy import or_, and_, func
 from icalendar import Calendar, Event
@@ -7,6 +8,7 @@ from icalendar import Calendar, Event
 from app.models import Interaction, Client, Lead, Project, FollowUpStatus, User, ActivityLog, ActivityType
 from app.database import SessionLocal
 from app.utils.auth_utils import requires_auth
+from app.schemas.interactions import InteractionCreateSchema, InteractionUpdateSchema
 
 interactions_bp = Blueprint("interactions", __name__, url_prefix="/api/interactions")
 
@@ -187,21 +189,31 @@ async def list_interactions():
 @interactions_bp.route("/", methods=["POST"])
 @requires_auth()
 async def create_interaction():
-    data = await request.get_json()
     user = request.user
+    raw_data = await request.get_json()
+    
+    # Validate input using Pydantic schema
+    try:
+        data = InteractionCreateSchema(**raw_data)
+    except ValidationError as e:
+        return jsonify({
+            "error": "Validation failed",
+            "details": e.errors()
+        }), 400
+
     session = SessionLocal()
     try:
         # Validate exactly one entity is specified
-        entity_ids = [data.get("client_id"), data.get("lead_id"), data.get("project_id")]
+        entity_ids = [data.client_id, data.lead_id, data.project_id]
         entity_count = sum(bool(x) for x in entity_ids)
         
         if entity_count != 1:
             return jsonify({"error": "Interaction must link to exactly one entity (client, lead, or project)"}), 400
 
         # Validate user has access to the entity
-        if data.get("client_id"):
+        if data.client_id:
             entity = session.query(Client).filter(
-                Client.id == int(data["client_id"]),
+                Client.id == data.client_id,
                 Client.tenant_id == user.tenant_id,
                 Client.deleted_at == None
             ).first()
@@ -211,9 +223,9 @@ async def create_interaction():
                 if entity.created_by != user.id and entity.assigned_to != user.id:
                     return jsonify({"error": "Access denied to this client"}), 403
                     
-        elif data.get("lead_id"):
+        elif data.lead_id:
             entity = session.query(Lead).filter(
-                Lead.id == int(data["lead_id"]),
+                Lead.id == data.lead_id,
                 Lead.tenant_id == user.tenant_id,
                 Lead.deleted_at == None
             ).first()
@@ -223,9 +235,9 @@ async def create_interaction():
                 if entity.created_by != user.id and entity.assigned_to != user.id:
                     return jsonify({"error": "Access denied to this lead"}), 403
                     
-        elif data.get("project_id"):  # NEW: Project validation
+        elif data.project_id:
             entity = session.query(Project).filter(
-                Project.id == int(data["project_id"]),
+                Project.id == data.project_id,
                 Project.tenant_id == user.tenant_id
             ).first()
             if not entity:
@@ -236,17 +248,17 @@ async def create_interaction():
 
         interaction = Interaction(
             tenant_id=user.tenant_id,
-            client_id=int(data["client_id"]) if data.get("client_id") else None,
-            lead_id=int(data["lead_id"]) if data.get("lead_id") else None,
-            project_id=int(data["project_id"]) if data.get("project_id") else None,  # NEW: Project support
-            contact_date=datetime.fromisoformat(data["contact_date"]),
-            summary=data["summary"],
-            outcome=data.get("outcome"),
-            notes=data.get("notes"),
-            follow_up=datetime.fromisoformat(data["follow_up"]) if data.get("follow_up") else None,
-            contact_person=data.get("contact_person"),
-            email=data.get("email"),
-            phone=data.get("phone")
+            client_id=data.client_id,
+            lead_id=data.lead_id,
+            project_id=data.project_id,
+            contact_date=data.contact_date,
+            summary=data.summary,
+            outcome=data.outcome,
+            notes=data.notes,
+            follow_up=data.follow_up,
+            contact_person=data.contact_person,
+            email=str(data.email) if data.email else None,
+            phone=data.phone
         )
         session.add(interaction)
         session.commit()
@@ -260,14 +272,24 @@ async def create_interaction():
 @interactions_bp.route("/<int:interaction_id>", methods=["PUT"])
 @requires_auth()
 async def update_interaction(interaction_id):
-    data = await request.get_json()
     user = request.user
+    raw_data = await request.get_json()
+    
+    # Validate input using Pydantic schema
+    try:
+        data = InteractionUpdateSchema(**raw_data)
+    except ValidationError as e:
+        return jsonify({
+            "error": "Validation failed",
+            "details": e.errors()
+        }), 400
+
     session = SessionLocal()
     try:
         interaction = session.query(Interaction).options(
             joinedload(Interaction.client),
             joinedload(Interaction.lead),
-            joinedload(Interaction.project)  # NEW: Load project
+            joinedload(Interaction.project)
         ).filter(
             Interaction.id == interaction_id,
             Interaction.tenant_id == user.tenant_id
@@ -283,21 +305,20 @@ async def update_interaction(interaction_id):
                 has_access = interaction.client.created_by == user.id or interaction.client.assigned_to == user.id
             elif interaction.lead_id:
                 has_access = interaction.lead.created_by == user.id or interaction.lead.assigned_to == user.id
-            elif interaction.project_id:  # NEW: Project access check
+            elif interaction.project_id:
                 has_access = interaction.project.created_by == user.id
                 
             if not has_access:
                 return jsonify({"error": "Access denied"}), 403
 
-        for field in [
-            "contact_date", "summary", "outcome",
-            "notes", "follow_up", "contact_person", "email", "phone"
-        ]:
-            if field in data:
-                if field in ["contact_date", "follow_up"]:
-                    setattr(interaction, field, datetime.fromisoformat(data[field]) if data[field] else None)
-                else:
-                    setattr(interaction, field, data[field] or None)
+        # Update fields with validated data
+        update_data = data.model_dump(exclude_unset=True)
+        
+        for field, value in update_data.items():
+            if field == "email":
+                interaction.email = str(value) if value else None
+            else:
+                setattr(interaction, field, value)
 
         session.commit()
         session.refresh(interaction)

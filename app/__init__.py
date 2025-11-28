@@ -5,6 +5,8 @@ from app.utils.keep_alive import keep_db_alive  # ✅ this still works
 from app.database import SessionLocal
 from sqlalchemy import text
 import asyncio
+import sentry_sdk
+from sentry_sdk.integrations.quart import QuartIntegration
 
 # 👇 Add warmup function directly here
 async def warmup_db():
@@ -40,6 +42,22 @@ def create_app():
     app.config.setdefault("STORAGE_ROOT", "./storage")
     app.config.setdefault("MAX_CONTENT_LENGTH", 20 * 1024 * 1024)  # 20 MB
     app.config.setdefault("STORAGE_VENDOR", "disk")  # "disk" | "b2"
+
+    # Initialize Sentry
+    if app.config.get("SENTRY_DSN"):
+        sentry_sdk.init(
+            dsn=app.config["SENTRY_DSN"],
+            integrations=[
+                QuartIntegration(),
+            ],
+            # Set traces_sample_rate to 1.0 to capture 100%
+            # of transactions for performance monitoring.
+            traces_sample_rate=1.0,
+            # Set profiles_sample_rate to 1.0 to profile 100%
+            # of sampled transactions.
+            profiles_sample_rate=1.0,
+        )
+
     register_blueprints(app)
 
     #✅ Before serving: warm up DB, then start keep-alive

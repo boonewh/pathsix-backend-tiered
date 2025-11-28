@@ -282,8 +282,7 @@ async def delete_lead(lead_id):
     try:
         lead_query = session.query(Lead).filter(
             Lead.id == lead_id,
-            Lead.tenant_id == user.tenant_id,
-            Lead.deleted_at == None
+            Lead.tenant_id == user.tenant_id
         )
 
         if not any(role.name == "admin" for role in user.roles):
@@ -297,6 +296,9 @@ async def delete_lead(lead_id):
         lead = lead_query.first()
         if not lead:
             return jsonify({"error": "Lead not found"}), 404
+
+        if lead.deleted_at is not None:
+            return jsonify({"message": "Lead already deleted"}), 200
 
         lead.deleted_at = datetime.utcnow()
         lead.deleted_by = user.id
@@ -522,6 +524,30 @@ async def bulk_delete_leads():
         )
         session.commit()
         return jsonify({"message": f"{updated_count} lead(s) deleted"})
+    finally:
+        session.close()
+
+@leads_bp.route("/bulk-purge", methods=["DELETE", "POST"])
+@requires_auth(roles=["admin"])
+async def bulk_purge_leads():
+    user = request.user
+    data = await request.get_json()
+    lead_ids = data.get("lead_ids", [])
+
+    if not lead_ids or not isinstance(lead_ids, list):
+        return jsonify({"error": "No lead IDs provided"}), 400
+
+    session = SessionLocal()
+    try:
+        # Only purge leads that are already soft-deleted
+        deleted_count = session.query(Lead).filter(
+            Lead.tenant_id == user.tenant_id,
+            Lead.id.in_(lead_ids),
+            Lead.deleted_at != None
+        ).delete(synchronize_session=False)
+        
+        session.commit()
+        return jsonify({"message": f"{deleted_count} lead(s) permanently deleted"})
     finally:
         session.close()
 

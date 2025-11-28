@@ -322,8 +322,7 @@ async def delete_client(client_id):
     try:
         client_query = session.query(Client).filter(
             Client.id == client_id,
-            Client.tenant_id == user.tenant_id,
-            Client.deleted_at == None
+            Client.tenant_id == user.tenant_id
         )
 
         if not any(role.name == "admin" for role in user.roles):
@@ -337,6 +336,9 @@ async def delete_client(client_id):
         client = client_query.first()
         if not client:
             return jsonify({"error": "Client not found"}), 404
+
+        if client.deleted_at is not None:
+            return jsonify({"message": "Client already deleted"}), 200
 
         client.deleted_at = datetime.utcnow()
         client.deleted_by = user.id
@@ -664,6 +666,30 @@ async def bulk_delete_clients():
         )
         session.commit()
         return jsonify({"message": f"{updated_count} client(s) deleted"})
+    finally:
+        session.close()
+
+@clients_bp.route("/bulk-purge", methods=["DELETE", "POST"])
+@requires_auth(roles=["admin"])
+async def bulk_purge_clients():
+    user = request.user
+    data = await request.get_json()
+    client_ids = data.get("client_ids", [])
+
+    if not client_ids or not isinstance(client_ids, list):
+        return jsonify({"error": "No client IDs provided"}), 400
+
+    session = SessionLocal()
+    try:
+        # Only purge clients that are already soft-deleted
+        deleted_count = session.query(Client).filter(
+            Client.tenant_id == user.tenant_id,
+            Client.id.in_(client_ids),
+            Client.deleted_at != None
+        ).delete(synchronize_session=False)
+        
+        session.commit()
+        return jsonify({"message": f"{deleted_count} client(s) permanently deleted"})
     finally:
         session.close()
 
