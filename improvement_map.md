@@ -739,13 +739,19 @@ Phase 1 – Validation Standardization ✅ **FULLY COMPLETE**
 
 ✅ PROJECT_STATUS_OPTIONS, CLIENT_STATUS_OPTIONS, LEAD_STATUS_OPTIONS
 
-Phase 1.5 – Monitoring & Visibility ⏳ **IN PROGRESS**
+Phase 1.5 – Monitoring & Visibility ✅ **COMPLETE**
 
 ✅ Integrate error tracking (Sentry) **COMPLETED**
 
-⏳ Add basic query logging
+✅ Add basic query logging **COMPLETED**
+   - Automatic endpoint timing logs with tenant context
+   - Slow query detection (>200ms threshold, configurable)
+   - Structured logging utilities for future use
 
-⏳ Ensure tenant_id and visibility rules are correctly enforced everywhere.
+✅ Tenant_id visibility audit **COMPLETED**
+   - All core entity queries properly filter by tenant_id
+   - UserPreference queries correctly filter by user_id (tenant-scoped)
+   - Audit script created for future verification (audit_tenant_isolation.py)
 
 Phase 2 – Code Cleanup & Stability
 

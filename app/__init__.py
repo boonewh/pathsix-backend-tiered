@@ -1,4 +1,4 @@
-from quart import Quart
+from quart import Quart, request
 from quart_cors import cors
 from app.routes import register_blueprints
 from app.utils.keep_alive import keep_db_alive  # ✅ this still works
@@ -7,6 +7,8 @@ from sqlalchemy import text
 import asyncio
 import sentry_sdk
 from sentry_sdk.integrations.quart import QuartIntegration
+from app.utils.logging_utils import logger, log_endpoint
+import time
 
 # 👇 Add warmup function directly here
 async def warmup_db():
@@ -60,10 +62,27 @@ def create_app():
 
     register_blueprints(app)
 
+    # Request logging middleware
+    @app.before_request
+    async def before_request():
+        request.start_time = time.time()
+    
+    @app.after_request
+    async def after_request(response):
+        if hasattr(request, 'start_time'):
+            duration_ms = (time.time() - request.start_time) * 1000
+            log_endpoint(
+                endpoint_name=request.endpoint or request.path,
+                duration_ms=duration_ms,
+                status_code=response.status_code
+            )
+        return response
+
     #✅ Before serving: warm up DB, then start keep-alive
     @app.before_serving
     async def startup():
         await warmup_db()
         app.add_background_task(keep_db_alive)
+        logger.info("PathSix CRM backend started successfully")
 
     return app
