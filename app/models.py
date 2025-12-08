@@ -126,6 +126,7 @@ class Lead(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     lead_status = Column(String(20), default="open")  # Valid: "open", "converted", "closed", "lost"
     converted_on = Column(DateTime, nullable=True)
+    lead_source = Column(String(50), nullable=True, index=True)  # Website, Referral, Cold Call, Email Campaign, etc.
 
     assigned_user = relationship("User", foreign_keys=[assigned_to])
     created_by_user = relationship("User", foreign_keys=[created_by])

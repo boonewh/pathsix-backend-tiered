@@ -11,11 +11,13 @@ from app.utils.auth_utils import (
 )
 from app.utils.auth_utils import requires_auth
 from app.utils.email_utils import send_email
+from app.utils.rate_limiter import rate_limit
 
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api")
 
 @auth_bp.route("/login", methods=["POST"])
+@rate_limit(max_attempts=5, window_seconds=60)  # 5 login attempts per minute per IP
 async def login():
     data = await request.get_json()
 
@@ -50,6 +52,7 @@ async def login():
         session.close()
 
 @auth_bp.route("/forgot-password", methods=["POST"])
+@rate_limit(max_attempts=3, window_seconds=300)  # 3 password reset attempts per 5 minutes per IP
 async def forgot_password():
     data = await request.get_json()
     email = data.get("email", "").lower().strip()

@@ -23,6 +23,19 @@ TYPE_OPTIONS = [
 # Lead-specific statuses
 LEAD_STATUS_OPTIONS = ["open", "qualified", "proposal", "closed"]
 
+# Lead sources
+LEAD_SOURCE_OPTIONS = [
+    "Website",
+    "Referral",
+    "Cold Call",
+    "Email Campaign",
+    "Social Media",
+    "Trade Show",
+    "Advertisement",
+    "Partner",
+    "Other"
+]
+
 # Client statuses 
 CLIENT_STATUS_OPTIONS = ["new", "active", "inactive"]
 
