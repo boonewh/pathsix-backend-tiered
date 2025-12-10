@@ -37,7 +37,7 @@ LEAD_SOURCE_OPTIONS = [
 ]
 
 # Client statuses 
-CLIENT_STATUS_OPTIONS = ["new", "active", "inactive"]
+CLIENT_STATUS_OPTIONS = ["new", "prospect", "active", "inactive"]
 
 # Phone labels
 PHONE_LABELS = ["work", "mobile", "home", "fax", "other"]
