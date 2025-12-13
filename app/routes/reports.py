@@ -1,5 +1,5 @@
 from quart import Blueprint, jsonify, request
-from sqlalchemy import func, and_, or_, case, distinct
+from sqlalchemy import func, and_, or_, case, distinct, cast, Date
 from datetime import datetime, timedelta
 from app.database import SessionLocal
 from app.models import Lead, Project, Client, Interaction, User, ActivityLog
@@ -41,7 +41,7 @@ async def get_reports():
         # Converted leads
         converted_leads = session.query(func.count(Lead.id)).filter(
             *filters,
-            Lead.lead_status == "converted"
+            Lead.lead_status == "closed"
         ).scalar()
 
         # Total projects
@@ -258,9 +258,22 @@ async def conversion_rate_report():
                 "conversion_rate": round((row.converted / row.total * 100), 2) if row.total > 0 else 0
             } for row in user_stats]
         
-        avg_days = session.query(
-            func.avg(func.julianday(Lead.converted_on) - func.julianday(Lead.created_at))
-        ).filter(*filters, Lead.lead_status == 'closed', Lead.converted_on != None).scalar()
+        # Calculate average days to convert (database-agnostic)
+        # PostgreSQL: EXTRACT(EPOCH FROM (date1 - date2)) / 86400
+        # SQLite: julianday(date1) - julianday(date2)
+        from app.config import SQLALCHEMY_DATABASE_URI
+        if 'postgresql' in SQLALCHEMY_DATABASE_URI or 'postgres' in SQLALCHEMY_DATABASE_URI:
+            # PostgreSQL approach: EXTRACT(EPOCH FROM (converted_on - created_at)) / 86400
+            avg_days = session.query(
+                func.avg(
+                    func.extract('epoch', Lead.converted_on - Lead.created_at) / 86400
+                )
+            ).filter(*filters, Lead.lead_status == 'closed', Lead.converted_on != None).scalar()
+        else:
+            # SQLite approach: julianday
+            avg_days = session.query(
+                func.avg(func.julianday(Lead.converted_on) - func.julianday(Lead.created_at))
+            ).filter(*filters, Lead.lead_status == 'closed', Lead.converted_on != None).scalar()
         
         return jsonify({
             "overall": {
@@ -542,9 +555,20 @@ async def project_performance_report():
         won_projects = session.query(func.count(Project.id)).filter(*filters, Project.project_status == 'won').scalar()
         win_rate = round((won_projects / total_projects * 100), 2) if total_projects > 0 else 0
         
-        avg_duration = session.query(
-            func.avg(func.julianday(Project.project_end) - func.julianday(Project.project_start))
-        ).filter(*filters, Project.project_start != None, Project.project_end != None, Project.project_status == 'won').scalar()
+        # Calculate average project duration (database-agnostic)
+        from app.config import SQLALCHEMY_DATABASE_URI
+        if 'postgresql' in SQLALCHEMY_DATABASE_URI or 'postgres' in SQLALCHEMY_DATABASE_URI:
+            # PostgreSQL approach: EXTRACT(EPOCH FROM (project_end - project_start)) / 86400
+            avg_duration = session.query(
+                func.avg(
+                    func.extract('epoch', Project.project_end - Project.project_start) / 86400
+                )
+            ).filter(*filters, Project.project_start != None, Project.project_end != None, Project.project_status == 'won').scalar()
+        else:
+            # SQLite approach: julianday
+            avg_duration = session.query(
+                func.avg(func.julianday(Project.project_end) - func.julianday(Project.project_start))
+            ).filter(*filters, Project.project_start != None, Project.project_end != None, Project.project_status == 'won').scalar()
         
         avg_value = session.query(func.avg(Project.project_worth)).filter(*filters, Project.project_worth != None).scalar()
         
