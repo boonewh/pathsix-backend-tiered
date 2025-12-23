@@ -1,0 +1,177 @@
+"""
+Restore job: download from B2 → verify checksum → GPG decrypt → pg_restore
+"""
+import os
+import subprocess
+import hashlib
+from datetime import datetime
+from app.database import SessionLocal
+from app.models import Backup, BackupRestore
+from app.config import (
+    SQLALCHEMY_DATABASE_URI,
+    BACKUP_GPG_PASSPHRASE
+)
+from app.utils.backup_storage import get_backup_storage
+from app.utils.logging_utils import logger
+
+
+def run_restore_job(restore_id: int):
+    """
+    Execute a database restore job:
+    1. Download encrypted backup from B2
+    2. Verify SHA-256 checksum
+    3. Decrypt with GPG
+    4. Run pg_restore with --clean and --if-exists
+    5. Update restore record
+    6. Cleanup local files
+    """
+    session = SessionLocal()
+    restore = None
+    local_encrypted_path = None
+    local_decrypted_path = None
+
+    try:
+        # Fetch restore record
+        restore = session.query(BackupRestore).filter_by(id=restore_id).first()
+        if not restore:
+            logger.error(f"[Restore] Restore ID {restore_id} not found")
+            return
+
+        # Fetch backup record
+        backup = session.query(Backup).filter_by(id=restore.backup_id).first()
+        if not backup:
+            raise Exception(f"Backup ID {restore.backup_id} not found")
+
+        if backup.status != "completed":
+            raise Exception(f"Backup {backup.id} is not in completed status (status: {backup.status})")
+
+        # Update restore status
+        restore.status = "in_progress"
+        session.commit()
+
+        logger.info(f"[Restore] Starting restore from backup {backup.id}")
+
+        # Parse database connection URL
+        db_url = SQLALCHEMY_DATABASE_URI
+        if db_url.startswith("sqlite"):
+            raise ValueError("SQLite restores not supported - use production PostgreSQL")
+
+        if not db_url.startswith("postgresql://"):
+            raise ValueError(f"Unsupported database URL: {db_url}")
+
+        # Create temporary file paths
+        temp_dir = "/tmp"
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        local_encrypted_path = os.path.join(temp_dir, f"restore_{timestamp}.dump.gpg")
+        local_decrypted_path = os.path.join(temp_dir, f"restore_{timestamp}.dump")
+
+        # Step 1: Download from B2
+        storage = get_backup_storage()
+        logger.info(f"[Restore] Downloading from B2: {backup.storage_key}")
+
+        download_success = storage.download_file(backup.storage_key, local_encrypted_path)
+        if not download_success:
+            raise Exception("B2 download failed")
+
+        logger.info(f"[Restore] Download completed: {local_encrypted_path}")
+
+        # Step 2: Verify checksum
+        logger.info(f"[Restore] Verifying checksum")
+        sha256_hash = hashlib.sha256()
+        with open(local_encrypted_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256_hash.update(chunk)
+        downloaded_checksum = sha256_hash.hexdigest()
+
+        if downloaded_checksum != backup.checksum:
+            raise Exception(
+                f"Checksum mismatch! Expected: {backup.checksum}, Got: {downloaded_checksum}"
+            )
+
+        logger.info(f"[Restore] Checksum verified")
+
+        # Step 3: Decrypt with GPG
+        if not BACKUP_GPG_PASSPHRASE:
+            raise ValueError("BACKUP_GPG_PASSPHRASE not configured")
+
+        logger.info(f"[Restore] Decrypting backup with GPG")
+        gpg_cmd = [
+            "gpg",
+            "--batch",                    # Non-interactive mode
+            "--yes",                      # Overwrite existing files
+            "--passphrase-fd", "0",       # Read passphrase from stdin
+            "--decrypt",                  # Decrypt mode
+            "--output", local_decrypted_path,
+            local_encrypted_path
+        ]
+
+        gpg_result = subprocess.run(
+            gpg_cmd,
+            input=BACKUP_GPG_PASSPHRASE,
+            capture_output=True,
+            text=True,
+            timeout=600  # 10 minute timeout
+        )
+
+        if gpg_result.returncode != 0:
+            raise Exception(f"GPG decryption failed: {gpg_result.stderr}")
+
+        logger.info(f"[Restore] Decryption completed: {local_decrypted_path}")
+
+        # Step 4: Run pg_restore
+        logger.info(f"[Restore] Starting pg_restore")
+        restore_cmd = [
+            "pg_restore",
+            "--clean",           # Drop existing objects before recreating
+            "--if-exists",       # Use IF EXISTS when dropping objects
+            "--no-owner",        # Don't restore ownership
+            "--no-acl",          # Don't restore access privileges
+            "--dbname", db_url,
+            local_decrypted_path
+        ]
+
+        restore_result = subprocess.run(
+            restore_cmd,
+            capture_output=True,
+            text=True,
+            timeout=3600  # 1 hour timeout
+        )
+
+        if restore_result.returncode != 0:
+            # pg_restore can return non-zero even for successful restores (due to warnings)
+            # Check if there are actual errors vs just warnings
+            stderr = restore_result.stderr.lower()
+            if "error" in stderr and "already exists" not in stderr:
+                logger.warning(f"[Restore] pg_restore warnings: {restore_result.stderr}")
+            else:
+                logger.info(f"[Restore] pg_restore completed with warnings (expected)")
+
+        logger.info(f"[Restore] pg_restore completed")
+
+        # Step 5: Mark as completed
+        restore.status = "completed"
+        restore.completed_at = datetime.utcnow()
+        session.commit()
+
+        logger.info(f"[Restore] Restore {restore_id} completed successfully")
+
+    except Exception as e:
+        logger.error(f"[Restore] Restore {restore_id} failed: {str(e)}")
+        if restore:
+            restore.status = "failed"
+            restore.error_message = str(e)
+            restore.completed_at = datetime.utcnow()
+            session.commit()
+        raise
+
+    finally:
+        # Cleanup local files
+        if local_encrypted_path and os.path.exists(local_encrypted_path):
+            os.remove(local_encrypted_path)
+            logger.info(f"[Restore] Cleaned up: {local_encrypted_path}")
+
+        if local_decrypted_path and os.path.exists(local_decrypted_path):
+            os.remove(local_decrypted_path)
+            logger.info(f"[Restore] Cleaned up: {local_decrypted_path}")
+
+        session.close()

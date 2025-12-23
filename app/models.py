@@ -356,3 +356,94 @@ class File(Base):
 
     def __repr__(self):
         return f"<File id={self.id} tenant={self.tenant_id} name={self.filename}>"
+
+
+class Backup(Base):
+    __tablename__ = "backups"
+
+    id = Column(Integer, primary_key=True)
+
+    # Backup metadata
+    filename = Column(String(255), nullable=False, index=True)
+    backup_type = Column(String(20), default="manual", nullable=False)  # manual|scheduled|pre_restore
+    status = Column(String(20), default="pending", nullable=False, index=True)  # pending|in_progress|completed|failed
+
+    # Storage location
+    storage_key = Column(String(1024), nullable=True)  # B2 object key
+    size_bytes = Column(Integer, nullable=True)
+    checksum = Column(String(64), nullable=True)  # SHA-256 checksum
+
+    # Database snapshot metadata
+    database_name = Column(String(100), nullable=True)
+    database_size_bytes = Column(Integer, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Job tracking
+    job_id = Column(String(100), nullable=True, index=True)  # RQ job ID
+
+    # Error tracking
+    error_message = Column(Text, nullable=True)
+
+    # Audit trail
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    # Relationships
+    creator = relationship("User", foreign_keys=[created_by])
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "filename": self.filename,
+            "type": self.backup_type,
+            "status": self.status,
+            "size": self.size_bytes,
+            "database_size": self.database_size_bytes,
+            "checksum": self.checksum,
+            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
+            "completed_at": self.completed_at.isoformat() + "Z" if self.completed_at else None,
+            "created_by": self.creator.email if self.creator else "system",
+            "error": self.error_message,
+        }
+
+    def __repr__(self):
+        return f"<Backup {self.filename} status={self.status}>"
+
+
+class BackupRestore(Base):
+    __tablename__ = "backup_restores"
+
+    id = Column(Integer, primary_key=True)
+    backup_id = Column(Integer, ForeignKey("backups.id"), nullable=False, index=True)
+    restored_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # Pre-restore safety snapshot (automatic backup before restore)
+    pre_restore_backup_id = Column(Integer, ForeignKey("backups.id"), nullable=True)
+
+    status = Column(String(20), default="in_progress", nullable=False)  # in_progress|completed|failed
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    # Relationships
+    backup = relationship("Backup", foreign_keys=[backup_id])
+    pre_restore_backup = relationship("Backup", foreign_keys=[pre_restore_backup_id])
+    restorer = relationship("User", foreign_keys=[restored_by])
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "backup_id": self.backup_id,
+            "pre_restore_backup_id": self.pre_restore_backup_id,
+            "restored_by": self.restorer.email if self.restorer else None,
+            "status": self.status,
+            "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() + "Z" if self.completed_at else None,
+            "error": self.error_message,
+        }
+
+    def __repr__(self):
+        return f"<BackupRestore backup_id={self.backup_id} status={self.status}>"
