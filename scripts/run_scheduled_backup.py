@@ -67,8 +67,10 @@ def main():
     session = SessionLocal()
 
     try:
-        # Create backup record
+        # Create backup record with temporary filename (will be updated by worker)
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         backup = Backup(
+            filename=f"scheduled_backup_{timestamp}.sql.gpg",
             backup_type="scheduled",
             status="pending",
             created_by=None,  # System-created
@@ -80,29 +82,34 @@ def main():
 
         logger.info(f"[Scheduled] Created backup record: {backup.id}")
 
+        backup_id = backup.id
+        session.close()  # Close session before running job
+
         # Run backup job synchronously (no queue needed for scheduled machines)
         # Scheduled machines run once and exit, so we can block
-        run_backup_job(backup.id, backup_type="scheduled")
+        run_backup_job(backup_id, backup_type="scheduled")
 
-        # Verify completion
-        session.refresh(backup)
+        # Verify completion with fresh session
+        verify_session = SessionLocal()
+        try:
+            verified_backup = verify_session.query(Backup).filter_by(id=backup_id).first()
 
-        if backup.status == "completed":
-            logger.info(f"[Scheduled] Backup {backup.id} completed successfully")
-            logger.info(f"[Scheduled] Filename: {backup.filename}")
-            logger.info(f"[Scheduled] Size: {backup.size_bytes} bytes")
-            logger.info(f"[Scheduled] Checksum: {backup.checksum}")
-            return 0
-        else:
-            logger.error(f"[Scheduled] Backup {backup.id} failed: {backup.error_message}")
-            return 1
+            if verified_backup and verified_backup.status == "completed":
+                logger.info(f"[Scheduled] Backup {backup_id} completed successfully")
+                logger.info(f"[Scheduled] Filename: {verified_backup.filename}")
+                logger.info(f"[Scheduled] Size: {verified_backup.size_bytes} bytes")
+                logger.info(f"[Scheduled] Checksum: {verified_backup.checksum}")
+                return 0
+            else:
+                logger.error(f"[Scheduled] Backup {backup_id} failed: {verified_backup.error_message if verified_backup else 'not found'}")
+                return 1
+        finally:
+            verify_session.close()
 
     except Exception as e:
         logger.error(f"[Scheduled] Scheduled backup failed: {str(e)}")
-        return 1
-
-    finally:
         session.close()
+        return 1
 
 
 if __name__ == "__main__":
