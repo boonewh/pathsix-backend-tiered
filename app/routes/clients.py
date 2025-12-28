@@ -8,6 +8,8 @@ from app.utils.email_utils import send_assignment_notification
 from app.utils.phone_utils import clean_phone_number
 from app.constants import TYPE_OPTIONS, PHONE_LABELS
 from app.schemas.clients import ClientCreateSchema, ClientUpdateSchema, ClientAssignSchema
+from app.middleware.quota_enforcer import requires_quota
+from app.middleware.usage_tracker import usage_tracker
 from sqlalchemy import or_, and_, func, desc
 from sqlalchemy.orm import joinedload
 
@@ -151,6 +153,7 @@ async def list_clients():
 @clients_bp.route("", methods=["POST"])
 @clients_bp.route("/", methods=["POST"])
 @requires_auth()
+@requires_quota('records')
 async def create_client():
     user = request.user
     raw_data = await request.get_json()
@@ -189,6 +192,11 @@ async def create_client():
         session.add(client)
         session.commit()
         session.refresh(client)
+
+        # Track record creation (async, non-blocking)
+        import asyncio
+        asyncio.create_task(usage_tracker.track_record_created(user.tenant_id))
+
         return jsonify({"id": client.id}), 201
     finally:
         session.close()

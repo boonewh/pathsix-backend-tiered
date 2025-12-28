@@ -8,6 +8,8 @@ from app.database import SessionLocal
 from app.models import File
 from app.utils.auth_utils import requires_auth
 from app.utils.storage_backend import get_storage
+from app.middleware.quota_enforcer import check_file_upload_quota
+from app.middleware.usage_tracker import usage_tracker
 import inspect
 
 
@@ -59,6 +61,11 @@ async def upload_files():
 
             if size > max_size:
                 return jsonify({"error": f"File {file.filename} exceeds max size"}), 413
+
+            # Check storage quota before upload
+            allowed, error_msg = await check_file_upload_quota(user.tenant_id, size)
+            if not allowed:
+                return jsonify({"error": error_msg}), 403
 
             ext = os.path.splitext(file.filename)[1]
             stored_name = f"{uuid.uuid4().hex}{ext}"
@@ -168,6 +175,11 @@ async def delete_file(file_id: int):
 
         session.delete(rec)
         session.commit()
+
+        # Recalculate storage usage after deletion (async, non-blocking)
+        import asyncio
+        asyncio.create_task(usage_tracker.recalculate_storage(user.tenant_id))
+
         return jsonify({"message": "Deleted"})
     finally:
         session.close()
