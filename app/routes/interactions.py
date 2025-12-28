@@ -9,6 +9,8 @@ from app.models import Interaction, Client, Lead, Project, FollowUpStatus, User,
 from app.database import SessionLocal
 from app.utils.auth_utils import requires_auth
 from app.schemas.interactions import InteractionCreateSchema, InteractionUpdateSchema
+from app.middleware.quota_enforcer import requires_quota
+from app.middleware.usage_tracker import usage_tracker
 
 interactions_bp = Blueprint("interactions", __name__, url_prefix="/api/interactions")
 
@@ -190,6 +192,7 @@ async def list_interactions():
 @interactions_bp.route("", methods=["POST"])
 @interactions_bp.route("/", methods=["POST"])
 @requires_auth()
+@requires_quota('records')
 async def create_interaction():
     user = request.user
     raw_data = await request.get_json()
@@ -265,6 +268,10 @@ async def create_interaction():
         session.add(interaction)
         session.commit()
         session.refresh(interaction)
+
+        # Track record creation (async, non-blocking)
+        import asyncio
+        asyncio.create_task(usage_tracker.track_record_created(user.tenant_id))
 
         return jsonify({"id": interaction.id}), 201
     finally:

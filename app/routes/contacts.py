@@ -5,6 +5,8 @@ from app.database import SessionLocal
 from app.utils.auth_utils import requires_auth
 from app.utils.phone_utils import clean_phone_number
 from app.schemas.contacts import ContactCreateSchema, ContactUpdateSchema
+from app.middleware.quota_enforcer import requires_quota
+from app.middleware.usage_tracker import usage_tracker
 
 contacts_bp = Blueprint("contacts", __name__, url_prefix="/api/contacts")
 
@@ -51,6 +53,7 @@ async def list_contacts():
 @contacts_bp.route("", methods=["POST"])
 @contacts_bp.route("/", methods=["POST"])
 @requires_auth()
+@requires_quota('records')
 async def create_contact():
     user = request.user
     raw_data = await request.get_json()
@@ -83,6 +86,10 @@ async def create_contact():
         session.add(contact)
         session.commit()
         session.refresh(contact)
+
+        # Track record creation (async, non-blocking)
+        import asyncio
+        asyncio.create_task(usage_tracker.track_record_created(user.tenant_id))
 
         return jsonify({"id": contact.id}), 201
     finally:

@@ -4,10 +4,12 @@ from pydantic import ValidationError
 from app.models import Project, ActivityLog, ActivityType, Client, Lead, User
 from app.database import SessionLocal
 from app.utils.auth_utils import requires_auth
-from app.utils.phone_utils import clean_phone_number  
+from app.utils.phone_utils import clean_phone_number
 from app.utils.email_utils import send_assignment_notification
 from app.constants import PROJECT_STATUS_OPTIONS, PHONE_LABELS
 from app.schemas.projects import ProjectCreateSchema, ProjectUpdateSchema
+from app.middleware.quota_enforcer import requires_quota
+from app.middleware.usage_tracker import usage_tracker
 from sqlalchemy.orm import joinedload
 from sqlalchemy import or_, and_
 
@@ -178,6 +180,7 @@ async def get_project(project_id):
 @projects_bp.route("", methods=["POST"])
 @projects_bp.route("/", methods=["POST"])
 @requires_auth()
+@requires_quota('records')
 async def create_project():
     user = request.user
     raw_data = await request.get_json()
@@ -216,6 +219,10 @@ async def create_project():
         session.add(project)
         session.commit()
         session.refresh(project)
+
+        # Track record creation (async, non-blocking)
+        import asyncio
+        asyncio.create_task(usage_tracker.track_record_created(user.tenant_id))
 
         return jsonify({
             "id": project.id,
