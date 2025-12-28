@@ -19,7 +19,8 @@ build/
 *.egg-info/
 
 # Quart/Flask secrets
-config.py
+# config.py is tracked (uses env vars), but keep local config private
+local_config.py
 
 # Storage and uploads
 storage/

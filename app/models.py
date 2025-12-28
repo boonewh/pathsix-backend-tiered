@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, Float, ForeignKey, Table, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Text, Float, ForeignKey, Table, Boolean, BigInteger
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.database import Base
@@ -13,6 +13,26 @@ user_roles = Table(
     Column('role_id', Integer, ForeignKey('roles.id')),
 )
 
+# === Tiered Pricing Enums ===
+
+class TenantStatus(enum.Enum):
+    active = "active"
+    read_only = "read_only"  # Over quota
+    suspended = "suspended"  # Payment failed
+    cancelled = "cancelled"
+
+class SubscriptionStatus(enum.Enum):
+    active = "active"
+    past_due = "past_due"
+    canceled = "canceled"
+    incomplete = "incomplete"
+    trialing = "trialing"
+
+class EmailVerificationStatus(enum.Enum):
+    pending = "pending"
+    verified = "verified"
+    expired = "expired"
+
 class FollowUpStatus(enum.Enum):
     pending = "pending"
     contacted = "contacted"
@@ -23,10 +43,15 @@ class FollowUpStatus(enum.Enum):
 class User(Base):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
-    tenant_id = Column(Integer, nullable=False, index=True)
+    tenant_id = Column(Integer, nullable=False, index=True)  # Will add FK constraint in migration
     email = Column(String(120), unique=True, nullable=False, index=True)
     password_hash = Column(String(128), nullable=False)
     is_active = Column(Boolean, default=True)
+
+    # Email verification for tiered pricing
+    email_verified = Column(Boolean, default=False, nullable=False)
+    email_verified_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
     roles = relationship("Role", secondary=user_roles, back_populates="users")
@@ -44,6 +69,222 @@ class Role(Base):
 
     def __repr__(self):
         return f"<Role {self.name}>"
+
+
+# === Tiered Pricing Models ===
+
+class Tenant(Base):
+    """
+    Tenant model for multi-tenancy with tiered pricing.
+    Converts tenant_id from just an integer to a full model with billing info.
+    """
+    __tablename__ = 'tenants'
+
+    # Primary key
+    id = Column(Integer, primary_key=True)
+
+    # Stripe integration
+    stripe_customer_id = Column(String(255), unique=True, nullable=True, index=True)
+    stripe_subscription_id = Column(String(255), unique=True, nullable=True, index=True)
+
+    # Plan details
+    plan_tier = Column(String(20), default='free', nullable=False, index=True)
+    # Valid values: 'free', 'starter', 'business', 'enterprise'
+
+    # Status
+    status = Column(Enum(TenantStatus), default=TenantStatus.active, nullable=False, index=True)
+
+    # Billing
+    billing_email = Column(String(120), nullable=True, index=True)
+    current_period_start = Column(DateTime, nullable=True)
+    current_period_end = Column(DateTime, nullable=True)
+
+    # Metadata
+    company_name = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Trial tracking (optional for future)
+    trial_ends_at = Column(DateTime, nullable=True)
+
+    # Relationships (using primaryjoin since tenant_id is not a proper FK yet)
+    users = relationship("User",
+                        primaryjoin="Tenant.id==User.tenant_id",
+                        foreign_keys="User.tenant_id",
+                        backref="tenant",
+                        viewonly=True)
+
+    __table_args__ = (
+        Index('idx_tenant_stripe_lookup', 'stripe_customer_id'),
+        Index('idx_tenant_plan_status', 'plan_tier', 'status'),
+    )
+
+    def __repr__(self):
+        return f"<Tenant id={self.id} plan={self.plan_tier} status={self.status.value}>"
+
+
+class PlanLimit(Base):
+    """
+    Plan limits configuration table.
+    Stores the quota limits for each tier (free, starter, business, enterprise).
+    """
+    __tablename__ = 'plan_limits'
+
+    id = Column(Integer, primary_key=True)
+    plan_tier = Column(String(20), unique=True, nullable=False, index=True)
+
+    # User limits
+    max_users = Column(Integer, nullable=False)  # -1 for unlimited
+
+    # Storage limits (bytes)
+    max_storage_bytes = Column(BigInteger, nullable=False)  # -1 for unlimited
+
+    # Database record limits
+    max_db_records = Column(Integer, nullable=False)  # -1 for unlimited
+
+    # API rate limits
+    max_api_calls_per_day = Column(Integer, nullable=False)
+
+    # Email limits
+    max_emails_per_month = Column(Integer, nullable=False)
+
+    # Feature flags (JSON for extensibility)
+    features = Column(JSON, default={}, nullable=False)
+    # Example: {"advanced_reporting": true, "api_access": true}
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index('idx_plan_tier', 'plan_tier'),
+    )
+
+    def __repr__(self):
+        return f"<PlanLimit {self.plan_tier}>"
+
+
+class TenantUsage(Base):
+    """
+    Tracks resource usage per tenant for quota enforcement.
+    Updated in real-time via background jobs to avoid slowing API responses.
+    """
+    __tablename__ = 'tenant_usage'
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey('tenants.id'), nullable=False, index=True)
+
+    # Current usage counters
+    storage_bytes = Column(BigInteger, default=0, nullable=False)
+    db_record_count = Column(Integer, default=0, nullable=False)
+    api_calls_today = Column(Integer, default=0, nullable=False)
+    emails_this_month = Column(Integer, default=0, nullable=False)
+
+    # Reset tracking
+    api_calls_reset_at = Column(DateTime, nullable=False)  # Daily reset
+    emails_reset_at = Column(DateTime, nullable=False)  # Monthly reset
+
+    # Cache for limits (denormalized for performance)
+    cached_max_storage = Column(BigInteger, nullable=True)
+    cached_max_records = Column(Integer, nullable=True)
+    cached_max_api_calls = Column(Integer, nullable=True)
+    cached_max_emails = Column(Integer, nullable=True)
+    cached_limits_updated_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    # Relationships
+    tenant = relationship("Tenant", backref="usage")
+
+    __table_args__ = (
+        Index('idx_tenant_usage_lookup', 'tenant_id'),
+        UniqueConstraint('tenant_id', name='uq_tenant_usage_tenant'),
+    )
+
+    def __repr__(self):
+        return f"<TenantUsage tenant_id={self.tenant_id} storage={self.storage_bytes} records={self.db_record_count}>"
+
+
+class Subscription(Base):
+    """
+    Stripe subscription tracking for paid tiers.
+    Synced via Stripe webhooks.
+    """
+    __tablename__ = 'subscriptions'
+
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey('tenants.id'), nullable=False, index=True)
+
+    # Stripe data
+    stripe_subscription_id = Column(String(255), unique=True, nullable=False, index=True)
+    stripe_customer_id = Column(String(255), nullable=False, index=True)
+    stripe_price_id = Column(String(255), nullable=False)  # Stripe Price ID
+
+    # Plan details
+    plan_tier = Column(String(20), nullable=False)
+    amount_cents = Column(Integer, nullable=False)  # Price in cents
+    currency = Column(String(3), default='usd', nullable=False)
+
+    # Status
+    status = Column(Enum(SubscriptionStatus), nullable=False, index=True)
+
+    # Billing cycle
+    current_period_start = Column(DateTime, nullable=False)
+    current_period_end = Column(DateTime, nullable=False)
+    cancel_at_period_end = Column(Boolean, default=False)
+    canceled_at = Column(DateTime, nullable=True)
+
+    # Trial
+    trial_start = Column(DateTime, nullable=True)
+    trial_end = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    tenant = relationship("Tenant", backref="subscriptions")
+
+    __table_args__ = (
+        Index('idx_subscription_stripe', 'stripe_subscription_id'),
+        Index('idx_subscription_status', 'tenant_id', 'status'),
+    )
+
+    def __repr__(self):
+        return f"<Subscription tenant_id={self.tenant_id} status={self.status.value}>"
+
+
+class EmailVerification(Base):
+    """
+    Email verification tokens for signup flow.
+    Required to prevent spam/abuse on free tier.
+    """
+    __tablename__ = 'email_verifications'
+
+    id = Column(Integer, primary_key=True)
+    email = Column(String(120), nullable=False, index=True)
+    token = Column(String(255), unique=True, nullable=False, index=True)
+    status = Column(Enum(EmailVerificationStatus), default=EmailVerificationStatus.pending, nullable=False)
+
+    # Associated data for signup
+    tenant_id = Column(Integer, nullable=True)  # Set after verification
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+
+    # Expiration
+    expires_at = Column(DateTime, nullable=False, index=True)
+    verified_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index('idx_email_verification_token', 'token'),
+        Index('idx_email_verification_status', 'email', 'status'),
+    )
+
+    def __repr__(self):
+        return f"<EmailVerification email={self.email} status={self.status.value}>"
 
 
 class Client(Base):

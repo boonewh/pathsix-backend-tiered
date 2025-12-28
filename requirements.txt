@@ -87,3 +87,4 @@ wsproto==1.2.0
 WTForms==3.2.1
 redis==5.0.1
 rq==1.16.2
+stripe==11.2.0
