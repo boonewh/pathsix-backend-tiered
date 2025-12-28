@@ -2,6 +2,7 @@ from quart import Blueprint
 from app.routes.accounts import accounts_bp
 from app.routes.auth import auth_bp
 from app.routes.billing import billing_bp
+from app.routes.webhooks import webhooks_bp
 from app.routes.clients import clients_bp
 from app.routes.leads import leads_bp
 from app.routes.reports import reports_bp
@@ -21,6 +22,7 @@ def register_blueprints(app):
     app.register_blueprint(auth_bp)
     app.register_blueprint(accounts_bp)
     app.register_blueprint(billing_bp)
+    app.register_blueprint(webhooks_bp)
     app.register_blueprint(clients_bp)
     app.register_blueprint(leads_bp)
     app.register_blueprint(reports_bp)

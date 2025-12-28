@@ -12,7 +12,16 @@ from app.utils.auth_utils import requires_auth
 from app.utils.plan_utils import get_plan_limits
 from app.database import SessionLocal
 from app.models import Tenant, TenantUsage
+from app.config import (
+    STRIPE_SECRET_KEY,
+    STRIPE_PRICE_STARTER,
+    STRIPE_PRICE_BUSINESS,
+    STRIPE_PRICE_ENTERPRISE
+)
 from datetime import datetime
+import stripe
+
+stripe.api_key = STRIPE_SECRET_KEY
 
 billing_bp = Blueprint('billing', __name__)
 
@@ -184,3 +193,143 @@ async def get_plan():
         return jsonify({"error": str(e)}), 500
     finally:
         session.close()
+
+
+@billing_bp.route('/api/billing/create-checkout-session', methods=['POST'])
+@requires_auth()
+async def create_checkout_session():
+    """
+    Create a Stripe checkout session for plan upgrade/subscription.
+
+    Request body:
+        {
+            "plan_tier": "starter" | "business" | "enterprise",
+            "success_url": "https://example.com/success",
+            "cancel_url": "https://example.com/cancel"
+        }
+
+    Returns:
+        {
+            "checkout_url": "https://checkout.stripe.com/..."
+        }
+    """
+    user = request.user
+    tenant_id = user.tenant_id
+    data = await request.get_json()
+
+    plan_tier = data.get('plan_tier')
+    success_url = data.get('success_url', 'http://localhost:3000/billing/success')
+    cancel_url = data.get('cancel_url', 'http://localhost:3000/billing')
+
+    # Validate plan tier
+    if plan_tier not in ['starter', 'business', 'enterprise']:
+        return jsonify({"error": "Invalid plan tier"}), 400
+
+    # Map plan to Stripe price ID
+    price_map = {
+        'starter': STRIPE_PRICE_STARTER,
+        'business': STRIPE_PRICE_BUSINESS,
+        'enterprise': STRIPE_PRICE_ENTERPRISE
+    }
+
+    price_id = price_map[plan_tier]
+    if not price_id:
+        return jsonify({"error": f"Stripe price ID not configured for {plan_tier} plan"}), 500
+
+    session_db = SessionLocal()
+    try:
+        tenant = session_db.query(Tenant).filter_by(id=tenant_id).first()
+        if not tenant:
+            return jsonify({"error": "Tenant not found"}), 404
+
+        # Create or retrieve Stripe customer
+        if tenant.stripe_customer_id:
+            customer_id = tenant.stripe_customer_id
+        else:
+            customer = stripe.Customer.create(
+                email=tenant.billing_email or user.email,
+                metadata={
+                    'tenant_id': tenant_id,
+                    'company_name': tenant.company_name or ''
+                }
+            )
+            customer_id = customer.id
+            tenant.stripe_customer_id = customer_id
+            session_db.commit()
+
+        # Create checkout session
+        checkout_session = stripe.checkout.Session.create(
+            customer=customer_id,
+            payment_method_types=['card'],
+            line_items=[{
+                'price': price_id,
+                'quantity': 1
+            }],
+            mode='subscription',
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={
+                'tenant_id': tenant_id,
+                'plan_tier': plan_tier
+            }
+        )
+
+        return jsonify({
+            "checkout_url": checkout_session.url
+        }), 200
+
+    except stripe.error.StripeError as e:
+        return jsonify({"error": f"Stripe error: {str(e)}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session_db.close()
+
+
+@billing_bp.route('/api/billing/customer-portal', methods=['POST'])
+@requires_auth()
+async def create_customer_portal_session():
+    """
+    Create a Stripe customer portal session for managing subscription.
+
+    Request body:
+        {
+            "return_url": "https://example.com/billing"
+        }
+
+    Returns:
+        {
+            "portal_url": "https://billing.stripe.com/..."
+        }
+    """
+    user = request.user
+    tenant_id = user.tenant_id
+    data = await request.get_json()
+
+    return_url = data.get('return_url', 'http://localhost:3000/billing')
+
+    session_db = SessionLocal()
+    try:
+        tenant = session_db.query(Tenant).filter_by(id=tenant_id).first()
+        if not tenant:
+            return jsonify({"error": "Tenant not found"}), 404
+
+        if not tenant.stripe_customer_id:
+            return jsonify({"error": "No active subscription found"}), 404
+
+        # Create customer portal session
+        portal_session = stripe.billing_portal.Session.create(
+            customer=tenant.stripe_customer_id,
+            return_url=return_url
+        )
+
+        return jsonify({
+            "portal_url": portal_session.url
+        }), 200
+
+    except stripe.error.StripeError as e:
+        return jsonify({"error": f"Stripe error: {str(e)}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        session_db.close()
