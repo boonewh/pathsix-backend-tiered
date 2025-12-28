@@ -34,3 +34,23 @@ def receive_after_cursor_execute(conn, cursor, statement, parameters, context, e
 
 SessionLocal = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False))
 Base = declarative_base()
+
+
+# TODO: CLEANUP - This function is redundant with the existing pattern.
+# The original repo used `Base.metadata.create_all(bind=engine)` directly (see reset_tables.py).
+# This wrapper was added for convenience in setup_dev.py but can be removed in favor of
+# the original approach. Consider removing this and updating setup_dev.py to use the
+# standard pattern: `from app.database import Base, engine; Base.metadata.create_all(bind=engine)`
+def init_db():
+    """
+    Initialize the database by creating all tables.
+    This is safe to run multiple times - it only creates tables that don't exist.
+
+    NOTE: This is just a convenience wrapper around Base.metadata.create_all(bind=engine)
+    """
+    # Import all models to ensure they're registered with Base.metadata
+    import app.models
+
+    # Create all tables
+    Base.metadata.create_all(bind=engine)
+    print("Database tables created successfully")

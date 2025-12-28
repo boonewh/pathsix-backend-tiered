@@ -59,6 +59,13 @@ async def list_backups():
 @requires_auth(roles=["admin"])
 async def create_backup():
     """Trigger a manual backup job."""
+    # Check if Redis/backup queue is available
+    if backup_queue is None:
+        return jsonify({
+            "error": "Backup service unavailable",
+            "details": "Redis connection not available. Install and start Redis to use backup features."
+        }), 503
+
     user = request.user
     session = SessionLocal()
 
@@ -130,6 +137,13 @@ async def restore_backup(backup_id: int):
 
     DANGER: This is a destructive operation!
     """
+    # Check if Redis/backup queue is available
+    if backup_queue is None:
+        return jsonify({
+            "error": "Backup service unavailable",
+            "details": "Redis connection not available. Install and start Redis to use backup features."
+        }), 503
+
     user = request.user
     session = SessionLocal()
 
