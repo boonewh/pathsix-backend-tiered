@@ -4,6 +4,7 @@ Run this to see what the logs look like.
 """
 
 import time
+import asyncio
 from app.utils.logging_utils import (
     logger,
     log_query,
@@ -93,15 +94,21 @@ def test_tenant_actions():
 
 
 @timing_logger("test_operation")
-async def test_timing_decorator():
+async def decorated_operation():
     """Test the automatic timing decorator."""
     print("\n" + "="*80)
     print("TEST 6: Timing Decorator")
     print("="*80)
-    
+
     # Simulate some work
     await asyncio.sleep(0.1)
     return "Operation complete"
+
+
+def test_timing_decorator():
+    """Ensure the decorator can wrap async functions without pytest-asyncio."""
+    result = asyncio.run(decorated_operation())
+    assert result == "Operation complete"
 
 
 async def run_all_tests():
@@ -116,7 +123,7 @@ async def run_all_tests():
     test_tenant_actions()
     
     # Test decorator
-    await test_timing_decorator()
+    await decorated_operation()
     
     print("\n" + "="*80)
     print("✅ LOGGING TEST COMPLETE")

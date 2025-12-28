@@ -8,6 +8,7 @@ import asyncio
 import sentry_sdk
 from sentry_sdk.integrations.quart import QuartIntegration
 from app.utils.logging_utils import logger, log_endpoint
+from app.middleware.usage_tracker import usage_tracker
 import time
 
 # 👇 Add warmup function directly here
@@ -76,6 +77,9 @@ def create_app():
                 duration_ms=duration_ms,
                 status_code=response.status_code
             )
+        user = getattr(request, "user", None)
+        if user and request.method != "OPTIONS" and response.status_code < 500:
+            asyncio.create_task(usage_tracker.track_api_call(user.tenant_id))
         return response
 
     #✅ Before serving: warm up DB, then start keep-alive
@@ -83,6 +87,11 @@ def create_app():
     async def startup():
         await warmup_db()
         app.add_background_task(keep_db_alive)
+        usage_tracker.start_background_processor()
         logger.info("PathSix CRM backend started successfully")
+
+    @app.after_serving
+    async def shutdown():
+        usage_tracker.stop_background_processor()
 
     return app
