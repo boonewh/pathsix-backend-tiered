@@ -8,6 +8,8 @@ from app.utils.email_utils import send_assignment_notification
 from app.utils.phone_utils import clean_phone_number
 from app.constants import TYPE_OPTIONS, LEAD_STATUS_OPTIONS, PHONE_LABELS
 from app.schemas.leads import LeadCreateSchema, LeadUpdateSchema, LeadAssignSchema
+from app.middleware.quota_enforcer import requires_quota
+from app.middleware.usage_tracker import usage_tracker
 from sqlalchemy import or_, and_
 from sqlalchemy.orm import joinedload
 
@@ -96,6 +98,7 @@ async def list_leads():
 @leads_bp.route("", methods=["POST"])
 @leads_bp.route("/", methods=["POST"])
 @requires_auth()
+@requires_quota('records')
 async def create_lead():
     print("DEBUG: create_lead function called!")
     user = request.user
@@ -142,6 +145,11 @@ async def create_lead():
         session.add(lead)
         session.commit()
         session.refresh(lead)
+
+        # Track record creation (async, non-blocking)
+        import asyncio
+        asyncio.create_task(usage_tracker.track_record_created(user.tenant_id))
+
         return jsonify({"id": lead.id}), 201
     finally:
         session.close()
