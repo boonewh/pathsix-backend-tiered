@@ -66,6 +66,19 @@ class UsageTracker:
         async with self._queue_lock:
             self._update_queue.append(('record_del', tenant_id))
 
+    async def get_pending_api_calls(self, tenant_id: int) -> int:
+        """
+        Get number of API call increments waiting to be processed for a tenant.
+
+        This is used by quota enforcement to include in-flight requests
+        that haven't been flushed to the database yet.
+        """
+        async with self._queue_lock:
+            return sum(
+                1 for update_type, queued_tenant_id in self._update_queue
+                if update_type == 'api' and queued_tenant_id == tenant_id
+            )
+
     async def recalculate_storage(self, tenant_id: int):
         """
         Recalculate total storage usage from File table.

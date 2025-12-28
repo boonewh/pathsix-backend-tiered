@@ -9,8 +9,88 @@ from functools import wraps
 from quart import request, jsonify
 from app.database import SessionLocal
 from app.models import Tenant, TenantUsage, TenantStatus
-from datetime import datetime
+from datetime import datetime, timedelta
 from app.utils.plan_utils import get_plan_limits
+from app.middleware.usage_tracker import usage_tracker
+
+
+def _evaluate_tenant_status(tenant: Tenant, method: str):
+    """Return an error response if the tenant's status blocks the request."""
+    if tenant.status == TenantStatus.suspended:
+        return jsonify({
+            "error": "Account suspended",
+            "message": "Your account has been suspended due to payment issues. Please update your billing information.",
+            "upgrade_url": "/billing/update"
+        }), 403
+
+    if tenant.status == TenantStatus.cancelled:
+        return jsonify({
+            "error": "Account cancelled",
+            "message": "This account has been cancelled."
+        }), 403
+
+    if tenant.status == TenantStatus.read_only and method in ["POST", "PUT", "DELETE", "PATCH"]:
+        return jsonify({
+            "error": "Quota exceeded",
+            "message": "Your account has exceeded quota limits and is in read-only mode. Please upgrade your plan.",
+            "status": "read_only",
+            "upgrade_url": "/billing/upgrade"
+        }), 403
+
+    return None
+
+
+def _ensure_usage_record(session, tenant_id: int) -> TenantUsage:
+    """
+    Ensure a TenantUsage row exists and has reset windows populated.
+    """
+    from dateutil.relativedelta import relativedelta
+
+    usage = session.query(TenantUsage).filter_by(tenant_id=tenant_id).first()
+    created_or_updated = False
+
+    if not usage:
+        usage = TenantUsage(
+            tenant_id=tenant_id,
+            api_calls_reset_at=datetime.utcnow() + timedelta(days=1),
+            emails_reset_at=(datetime.utcnow() + relativedelta(months=1)).replace(day=1)
+        )
+        session.add(usage)
+        created_or_updated = True
+
+    if usage.api_calls_reset_at is None:
+        usage.api_calls_reset_at = datetime.utcnow() + timedelta(days=1)
+        created_or_updated = True
+
+    if usage.emails_reset_at is None:
+        usage.emails_reset_at = (datetime.utcnow() + relativedelta(months=1)).replace(day=1)
+        created_or_updated = True
+
+    if created_or_updated:
+        session.commit()
+
+    return usage
+
+
+def _reset_usage_windows(usage: TenantUsage, session):
+    """Reset daily/monthly counters when their windows have expired."""
+    from dateutil.relativedelta import relativedelta
+
+    now = datetime.utcnow()
+    updated = False
+
+    if usage.api_calls_reset_at and now > usage.api_calls_reset_at:
+        usage.api_calls_today = 0
+        usage.api_calls_reset_at = now + timedelta(days=1)
+        updated = True
+
+    if usage.emails_reset_at and now > usage.emails_reset_at:
+        usage.emails_this_month = 0
+        usage.emails_reset_at = (now + relativedelta(months=1)).replace(day=1)
+        updated = True
+
+    if updated:
+        session.commit()
 
 
 def requires_quota(quota_type: str = None):
@@ -48,43 +128,12 @@ def requires_quota(quota_type: str = None):
                 if not tenant:
                     return jsonify({"error": "Tenant not found"}), 500
 
-                # Check tenant status
-                if tenant.status == TenantStatus.suspended:
-                    return jsonify({
-                        "error": "Account suspended",
-                        "message": "Your account has been suspended due to payment issues. Please update your billing information.",
-                        "upgrade_url": "/billing/update"
-                    }), 403
+                status_response = _evaluate_tenant_status(tenant, request.method)
+                if status_response:
+                    return status_response
 
-                if tenant.status == TenantStatus.cancelled:
-                    return jsonify({
-                        "error": "Account cancelled",
-                        "message": "This account has been cancelled."
-                    }), 403
-
-                # Block writes if in read-only mode
-                if tenant.status == TenantStatus.read_only:
-                    if request.method in ["POST", "PUT", "DELETE", "PATCH"]:
-                        return jsonify({
-                            "error": "Quota exceeded",
-                            "message": "Your account has exceeded quota limits and is in read-only mode. Please upgrade your plan.",
-                            "status": "read_only",
-                            "upgrade_url": "/billing/upgrade"
-                        }), 403
-
-                # Get usage data
-                usage = session.query(TenantUsage).filter_by(tenant_id=user.tenant_id).first()
-                if not usage:
-                    # Initialize usage if missing
-                    from datetime import timedelta
-                    from dateutil.relativedelta import relativedelta
-                    usage = TenantUsage(
-                        tenant_id=user.tenant_id,
-                        api_calls_reset_at=datetime.utcnow() + timedelta(days=1),
-                        emails_reset_at=(datetime.utcnow() + relativedelta(months=1)).replace(day=1)
-                    )
-                    session.add(usage)
-                    session.commit()
+                usage = _ensure_usage_record(session, user.tenant_id)
+                _reset_usage_windows(usage, session)
 
                 # Get plan limits
                 limits = get_plan_limits(tenant.plan_tier, session)
@@ -113,14 +162,6 @@ def requires_quota(quota_type: str = None):
                         }), 403
 
                 elif quota_type == 'emails':
-                    # Reset counter if needed
-                    if datetime.utcnow() > usage.emails_reset_at:
-                        usage.emails_this_month = 0
-                        # Reset to first day of next month
-                        from dateutil.relativedelta import relativedelta
-                        usage.emails_reset_at = (datetime.utcnow() + relativedelta(months=1)).replace(day=1)
-                        session.commit()
-
                     if usage.emails_this_month >= limits['max_emails_per_month']:
                         return jsonify({
                             "error": "Email limit exceeded",
@@ -194,6 +235,46 @@ def requires_plan(tiers: list):
 
         return wrapper
     return decorator
+
+
+async def enforce_api_quota(user) -> tuple | None:
+    """
+    Check tenant status and API call quota for authenticated requests.
+
+    Returns:
+        None if allowed, otherwise a tuple of (json_response, status_code)
+    """
+    session = SessionLocal()
+    try:
+        tenant = session.query(Tenant).filter_by(id=user.tenant_id).first()
+        if not tenant:
+            return jsonify({"error": "Tenant not found"}), 500
+
+        status_response = _evaluate_tenant_status(tenant, request.method)
+        if status_response:
+            return status_response
+
+        usage = _ensure_usage_record(session, tenant.id)
+        _reset_usage_windows(usage, session)
+
+        limits = get_plan_limits(tenant.plan_tier, session)
+        pending_calls = await usage_tracker.get_pending_api_calls(tenant.id)
+        current_calls = usage.api_calls_today + pending_calls
+
+        if limits['max_api_calls_per_day'] != -1 and current_calls >= limits['max_api_calls_per_day']:
+            return jsonify({
+                "error": "API limit exceeded",
+                "message": f"You've reached the daily API limit for your {tenant.plan_tier} plan.",
+                "current_usage": usage.api_calls_today,
+                "pending_usage": pending_calls,
+                "limit": limits['max_api_calls_per_day'],
+                "plan_tier": tenant.plan_tier,
+                "upgrade_url": "/billing/upgrade"
+            }), 429
+
+        return None
+    finally:
+        session.close()
 
 
 async def check_file_upload_quota(tenant_id: int, file_size: int) -> tuple:

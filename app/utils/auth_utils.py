@@ -8,6 +8,7 @@ from app.database import SessionLocal
 from itsdangerous import URLSafeTimedSerializer
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import joinedload
+from app.middleware.quota_enforcer import enforce_api_quota
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -62,6 +63,11 @@ def requires_auth(roles: list = None):
                 return jsonify({"error": "Forbidden"}), 403
 
             request.user = user
+
+            quota_response = await enforce_api_quota(user)
+            if quota_response:
+                return quota_response
+
             return await fn(*args, **kwargs)
         return decorated
     return wrapper
