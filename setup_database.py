@@ -45,9 +45,9 @@ def setup_plan_limits(session):
             'plan_tier': 'free',
             'max_users': 1,
             'max_storage_bytes': 0,  # 0 GB
-            'max_db_records': 100,
-            'max_api_calls_per_day': 500,
-            'max_emails_per_month': 10,
+            'max_db_records': 25,
+            'max_api_calls_per_day': 100,
+            'max_emails_per_month': 3,
             'features': {}
         },
         {

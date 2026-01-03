@@ -27,9 +27,9 @@ A production-ready Quart-based (async Flask) backend for the PathSix CRM system 
 | **Price** | $0 | $14.99/mo | $79/mo | $499/mo |
 | **Users** | 1 | 3 | 10 | Unlimited |
 | **Storage** | 0 GB | 2 GB | 25 GB | 250 GB |
-| **Records** | 100 | 5,000 | 50,000 | 500,000 |
-| **API Calls/Day** | 500 | 5,000 | 50,000 | Unlimited |
-| **Emails/Month** | 10 | 100 | 1,000 | 10,000 |
+| **Records** | 25 | 5,000 | 50,000 | 500,000 |
+| **API Calls/Day** | 100 | 5,000 | 50,000 | Unlimited |
+| **Emails/Month** | 3 | 100 | 1,000 | 10,000 |
 | **File Uploads** | ❌ | ✅ | ✅ | ✅ |
 
 ## Quick Setup
