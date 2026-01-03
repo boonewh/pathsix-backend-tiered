@@ -99,6 +99,15 @@ Plan: Enterprise (for testing without quota limits)
 - `POST /api/billing/customer-portal` - Get Stripe customer portal link
 - `POST /api/webhooks/stripe` - Stripe webhook handler (subscription lifecycle)
 
+### Admin Analytics (Platform Owner)
+Admin-only endpoints for platform visibility and business metrics:
+- `GET /api/admin/analytics/overview` - Platform overview (total tenants, MRR, signups)
+- `GET /api/admin/analytics/tiers` - Breakdown by pricing tier
+- `GET /api/admin/analytics/usage` - Customers approaching quota limits
+- `GET /api/admin/analytics/customers` - Customer list with filters (tier, status, sort, pagination)
+- `GET /api/admin/analytics/revenue` - Revenue metrics (MRR, churn, LTV, trends)
+- `GET /api/admin/analytics/health` - Platform health (failed payments, upsell opportunities)
+
 ### CRM Endpoints
 All CRM endpoints require authentication and enforce quota limits:
 - `/api/clients/*` - Client management
