@@ -1,5 +1,16 @@
 # Admin Analytics Dashboard - Frontend Implementation Plan
 
+## ⚠️ IMPORTANT: Platform Owner Only - NOT for Tenant Users
+
+**This dashboard is for YOU (the SaaS platform owner), not your customers.**
+
+- Shows ALL tenants across your entire platform
+- Requires `admin` role (only platform owner account has this)
+- Completely separate from tenant CRM functionality
+- Regular users signing up via `/api/signup` cannot access this
+
+---
+
 **Target:** Build a comprehensive admin dashboard for platform owner visibility into customers, revenue, and usage metrics.
 
 **Timeline Estimate:** 2-3 days for complete implementation

@@ -96,8 +96,15 @@ def setup_plan_limits(session):
         print("  [OK] All plans already exist")
 
 def create_test_admin(session):
-    """Create a test admin user with known credentials."""
-    print("\n[USER] Setting up test admin user...")
+    """Create a platform owner admin account with known credentials.
+
+    This account has the 'admin' role which grants access to:
+    - Admin analytics endpoints (ALL tenant visibility, revenue metrics)
+    - Platform-wide monitoring and business intelligence
+
+    Regular users signing up via /api/signup do NOT get admin role.
+    """
+    print("\n[USER] Setting up platform owner admin account...")
 
     test_email = "admin@pathsix.local"
     test_password = "PathSix2025!"
@@ -105,13 +112,14 @@ def create_test_admin(session):
     # Check if user already exists
     existing_user = session.query(User).filter_by(email=test_email).first()
     if existing_user:
-        print(f"  [SKIP] Test admin already exists: {test_email}")
-        print(f"\n  [LOGIN] LOGIN CREDENTIALS:")
+        print(f"  [SKIP] Platform owner account already exists: {test_email}")
+        print(f"\n  [LOGIN] PLATFORM OWNER LOGIN CREDENTIALS:")
         print(f"     Email: {test_email}")
         print(f"     Password: {test_password}")
+        print(f"     Access: Admin analytics + full platform visibility")
         return
 
-    # Create tenant for test admin
+    # Create tenant for platform owner (free tier for development/testing)
     tenant = Tenant(
         plan_tier='free',
         status=TenantStatus.active,
@@ -157,13 +165,14 @@ def create_test_admin(session):
 
     session.commit()
 
-    print(f"  [OK] Created test admin user")
+    print(f"  [OK] Created platform owner account")
     print(f"  [OK] Assigned roles: admin, file_uploads")
     print(f"  [OK] Email verified: True")
     print(f"  [OK] Tenant ID: {tenant.id}")
-    print(f"\n  [LOGIN] LOGIN CREDENTIALS:")
+    print(f"\n  [LOGIN] PLATFORM OWNER LOGIN CREDENTIALS:")
     print(f"     Email: {test_email}")
     print(f"     Password: {test_password}")
+    print(f"     Access: Admin analytics + full platform visibility")
 
 def main():
     """Run all setup tasks."""

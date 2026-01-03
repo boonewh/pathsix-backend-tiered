@@ -99,7 +99,11 @@ Plan: Enterprise (for testing without quota limits)
 - `POST /api/billing/customer-portal` - Get Stripe customer portal link
 - `POST /api/webhooks/stripe` - Stripe webhook handler (subscription lifecycle)
 
-### Admin Analytics (Platform Owner)
+### Admin Analytics (Platform Owner Only - NOT for Tenants)
+**IMPORTANT:** These endpoints are for YOU (the SaaS platform owner), not your customers. They provide visibility into ALL tenants, revenue metrics, and business health across your entire platform.
+
+**Access:** Requires `admin` role (only platform owner account has this)
+
 Admin-only endpoints for platform visibility and business metrics:
 - `GET /api/admin/analytics/overview` - Platform overview (total tenants, MRR, signups)
 - `GET /api/admin/analytics/tiers` - Breakdown by pricing tier
@@ -107,6 +111,8 @@ Admin-only endpoints for platform visibility and business metrics:
 - `GET /api/admin/analytics/customers` - Customer list with filters (tier, status, sort, pagination)
 - `GET /api/admin/analytics/revenue` - Revenue metrics (MRR, churn, LTV, trends)
 - `GET /api/admin/analytics/health` - Platform health (failed payments, upsell opportunities)
+
+**Note:** Regular tenant users signing up through `/api/signup` do NOT get admin role and cannot access these endpoints. This is completely separate from tenant CRM functionality.
 
 ### CRM Endpoints
 All CRM endpoints require authentication and enforce quota limits:
