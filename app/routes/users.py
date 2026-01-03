@@ -1,7 +1,8 @@
 from quart import Blueprint, request, jsonify
-from app.models import User, Role, ActivityLog, ActivityType
+from app.models import User, Role, ActivityLog, ActivityType, Tenant
 from app.database import SessionLocal
 from app.utils.auth_utils import requires_auth, hash_password
+from app.utils.plan_utils import get_plan_limits
 
 users_bp = Blueprint("users", __name__, url_prefix="/api/users")
 
@@ -51,6 +52,24 @@ async def create_user():
 
         if session.query(User).filter_by(email=email).first():
             return jsonify({"error": "User already exists"}), 400
+
+        # Check user quota before creating new user
+        tenant = session.query(Tenant).filter_by(id=user.tenant_id).first()
+        if not tenant:
+            return jsonify({"error": "Tenant not found"}), 404
+
+        limits = get_plan_limits(tenant.plan_tier, session)
+        current_user_count = session.query(User).filter_by(tenant_id=user.tenant_id).count()
+
+        # Check if tenant has reached user limit (-1 means unlimited)
+        if limits['max_users'] != -1 and current_user_count >= limits['max_users']:
+            return jsonify({
+                "error": f"User limit reached. Your {tenant.plan_tier} plan allows {limits['max_users']} user(s). Please upgrade your plan.",
+                "quota_type": "users",
+                "current": current_user_count,
+                "limit": limits['max_users'],
+                "upgrade_url": "/billing"
+            }), 403
 
         roles = session.query(Role).filter(Role.name.in_(role_names)).all()
 
