@@ -11,8 +11,10 @@ Provides analytics and insights for the platform owner to monitor:
 All endpoints require admin role.
 """
 
+# type: ignore - SQLAlchemy dynamic queries confuse type checkers
+
 from quart import Blueprint, jsonify
-from sqlalchemy import func, case, and_, or_
+from sqlalchemy import func, case, and_, or_  # type: ignore
 from datetime import datetime, timedelta
 from app.utils.auth_utils import requires_auth
 from app.models import Tenant, TenantUsage, Subscription, User, PlanLimit, TenantStatus
@@ -31,7 +33,7 @@ TIER_PRICES = {
 
 @admin_analytics_bp.route('/api/admin/analytics/overview', methods=['GET'])
 @requires_auth(roles=['admin'])
-async def get_overview(user):
+async def get_overview():
     """
     Get high-level platform overview metrics.
 
@@ -91,7 +93,7 @@ async def get_overview(user):
 
 @admin_analytics_bp.route('/api/admin/analytics/tiers', methods=['GET'])
 @requires_auth(roles=['admin'])
-async def get_tier_breakdown(user):
+async def get_tier_breakdown():
     """
     Get detailed breakdown by pricing tier.
 
@@ -177,7 +179,7 @@ async def get_tier_breakdown(user):
 
 @admin_analytics_bp.route('/api/admin/analytics/usage', methods=['GET'])
 @requires_auth(roles=['admin'])
-async def get_usage_patterns(user):
+async def get_usage_patterns():
     """
     Get usage pattern insights.
 
@@ -246,7 +248,7 @@ async def get_usage_patterns(user):
 
 @admin_analytics_bp.route('/api/admin/analytics/customers', methods=['GET'])
 @requires_auth(roles=['admin'])
-async def get_customer_list(user):
+async def get_customer_list():
     """
     Get paginated customer list with filters.
 
@@ -340,7 +342,7 @@ async def get_customer_list(user):
 
 @admin_analytics_bp.route('/api/admin/analytics/revenue', methods=['GET'])
 @requires_auth(roles=['admin'])
-async def get_revenue_metrics(user):
+async def get_revenue_metrics():
     """
     Get revenue tracking and projections.
 
@@ -435,7 +437,7 @@ async def get_revenue_metrics(user):
 
 @admin_analytics_bp.route('/api/admin/analytics/health', methods=['GET'])
 @requires_auth(roles=['admin'])
-async def get_platform_health(user):
+async def get_platform_health():
     """
     Get platform health indicators.
 
